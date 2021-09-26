@@ -9,8 +9,6 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace LunarCalendar
 {
-
-
     class Program
     {
         // Program entry point
@@ -40,18 +38,9 @@ namespace LunarCalendar
             });
 
             client.Log += Log;
-            client.Connected += Client_Connected;
             commands.Log += Log;
 
-
-        }
-
-        private Task Client_Connected()
-        {
-            //do this here currently cause client needs to be connected before calendarmodule inits
-            //TODO: just init calendarmodule later somehow
             services = BuildServiceProvider();
-            return Task.CompletedTask;
         }
 
         public IServiceProvider BuildServiceProvider() => new ServiceCollection()
@@ -84,10 +73,10 @@ namespace LunarCalendar
 
         private async Task MainAsync()
         {
-            await InitCommands();
-
             await client.LoginAsync(TokenType.Bot, Environment.GetEnvironmentVariable("DiscordToken"));
             await client.StartAsync();
+
+            await InitCommands();
 
             await Task.Delay(Timeout.Infinite);
         }

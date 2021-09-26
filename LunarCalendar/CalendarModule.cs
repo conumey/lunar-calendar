@@ -6,15 +6,18 @@ using System.Threading.Tasks;
 using System.IO;
 using System.Text.Json;
 using System.Linq;
+using System;
+using System.Text;
 
 namespace LunarCalendar
 {
-    public class CalendarModule : ModuleBase<SocketCommandContext>
+    [Group("event")]
+    public partial class CalendarModule : ModuleBase<SocketCommandContext>
     {
         private DiscordSocketClient client { get; set; }
-        private List<ulong> channelIDs = new List<ulong>();
-        private List<ISocketMessageChannel> channels = new List<ISocketMessageChannel>();
-        private List<CalendarEvent> events = new List<CalendarEvent>();
+        private List<ulong> channelIDs = new();
+        private List<ISocketMessageChannel> channels = new();
+        private Dictionary<ulong, List<CalendarEvent>> events = new();
 
         public CalendarModule(DiscordSocketClient Client)
         {
@@ -22,17 +25,54 @@ namespace LunarCalendar
             init().GetAwaiter().GetResult();
         }
 
+
+        [Command("create")]
+        [Summary("Creates event.")]
+        public async Task CreateEvent(string name, DateTime date, string description)
+        {
+            ulong channelID = Context.Channel.Id;
+            if (!events.ContainsKey(channelID))
+                events.Add(channelID, new());
+
+            CalendarEvent e = new CalendarEvent()
+            {
+                Name = name,
+                Date = date,
+                Description = description
+            };
+
+            events[channelID].Add(e);
+            await writeToFiles();
+            await setBaseMessage(Context.Channel.Id);
+            await Context.Message.DeleteAsync();
+        }
+
+        [Command("register")]
+        [Summary("Sets channel as calendar channel.")]
+        public async Task RegisterChannel([Remainder] int _ = 0)
+        {
+            channelIDs.Add(Context.Channel.Id);
+            await writeToFiles();
+            await setBaseMessage(Context.Channel.Id);
+            await Context.Message.DeleteAsync();
+        }
+
         private async Task init()
         {
-            string channelsJson = "";
-            if (File.Exists("channels.json"))
-                channelsJson = await File.ReadAllTextAsync("channels.json");
-            else
-                File.Create("channels.json");
+            while (client.ConnectionState != ConnectionState.Connected)
+                await Task.Delay(10); //TODO: this better
 
-            if(channelsJson != "")
+
+            await Task.Delay(2000);
+
+            using(var fs = new FileStream("events.json", FileMode.OpenOrCreate))
             {
-                var channelList = JsonSerializer.Deserialize<List<ulong>>(channelsJson);
+                events = await JsonSerializer.DeserializeAsync<Dictionary<ulong, List<CalendarEvent>>>(fs);
+            }
+
+            using (var fs = new FileStream("channels.json", FileMode.OpenOrCreate))
+            {
+                var channelList = await JsonSerializer.DeserializeAsync<List<ulong>>(fs);
                 foreach (var ch in channelList)
                 {
                     _ = setBaseMessage(ch);
@@ -44,47 +84,69 @@ namespace LunarCalendar
         {
             var channel = client.GetChannel(ch) as ISocketMessageChannel;
             channels.Add(channel);
-            List<IMessage> pinned = (List<IMessage>)await channel.GetPinnedMessagesAsync();
 
+            var pinned = await channel.GetPinnedMessagesAsync();
             var myMessages = pinned.Where(m => m.Author.Id == client.CurrentUser.Id);
-            if (myMessages.Any())
-            {
-                await channel.ModifyMessageAsync(myMessages.First().Id, msg => msg.Content = "butts2");
-            }
-            else
-            {
-                await channel.SendMessageAsync("butts");
-            }
 
-            
-            //draw calendar n shit
+            string content = generateCalendar(ch);
+
+            if (myMessages.Any())
+                await channel.ModifyMessageAsync(myMessages.First().Id, msg => msg.Content = content);
+            else
+                await (await channel.SendMessageAsync(content)).PinAsync();
         }
 
-        // ~say hello world -> hello world
-        [Command("say")]
-		[Summary("Echoes a message.")]
-		public Task SayAsync([Remainder][Summary("The text to echo")] string echo)
-			=> ReplyAsync(echo);
-
-        // ~say hello world -> hello world
-        [Command("register")]
-        [Summary("Sets channel as calendar channel.")]
-        public async Task RegisterChannel([Remainder] int _ = 0)
+        private string generateCalendar(ulong ch)
         {
-            channelIDs.Add(Context.Channel.Id);
-            await writeToFiles();
-            await Context.Message.DeleteAsync();
-            return;
+            DateTime startDate = DateTime.Today;
+            DateTime endDate = startDate.AddDays(14);
+            StringBuilder sb = new();
+
+            string dividingLine = "|--------------------------------------------------------------------|";
+
+            sb.AppendLine("```/--------------------------------------------------------------------\\");
+
+            DateTime date = startDate;
+            while (true)
+            {
+                string line = "";
+                line += $"| {date:ddd dd MMM} | ";
+
+                if (events.ContainsKey(ch))
+                    foreach (CalendarEvent ev in events[ch].Where(e => e.Date == date))
+                    {
+                        line += $"[- {ev.Name} -]";
+                    }
+
+                sb.AppendLine(line);
+                date = date.AddDays(1);
+
+                if (date.AddDays(1) == endDate)
+                    break;
+
+                sb.AppendLine(dividingLine);
+            }
+
+            sb.AppendLine("\\--------------------------------------------------------------------/```");
+
+            return sb.ToString();
         }
 
         private async Task writeToFiles()
         {
-            string json = JsonSerializer.Serialize(channelIDs);
+            try
+            {
+                string json = JsonSerializer.Serialize(channelIDs);
                 await File.WriteAllTextAsync("channels.json", json);
 
+                json = JsonSerializer.Serialize(events);
+                await File.WriteAllTextAsync("events.json", json);
+            }
+            catch(Exception e)
+            {
+                var test = e;
+            }
 
-            json = JsonSerializer.Serialize(events);
-            await File.WriteAllTextAsync("events.json", json);
         }
 
     }
